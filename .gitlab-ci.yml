@@ -1,0 +1,322 @@
+stages:
+  - "Code Checks"
+  - "Compile"
+  - "Build Docker Images"
+  - "Build Docker Images (dependencies)"
+  - "Post Build Actions"
+  - "Test"
+
+variables:
+  # When you use the dind service, you must instruct Docker to talk with
+  # the daemon started inside of the service. The daemon is available
+  # with a network connection instead of the default
+  # /var/run/docker.sock socket. Docker 19.03 does this automatically
+  # by setting the DOCKER_HOST in
+  # https://github.com/docker-library/docker/blob/d45051476babc297257df490d22cbd806f1b11e4/19.03/docker-entrypoint.sh#L23-L29
+  #
+  # The 'docker' hostname is the alias of the service container as described at
+  # https://docs.gitlab.com/ee/ci/docker/using_docker_images.html#accessing-the-services.
+  #
+  # Specify to Docker where to create the certificates. Docker
+  # creates them automatically on boot, and creates
+  # `/certs/client` to share between the service and job
+  # container, thanks to volume mount from config.toml
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: "" # disable TLS
+  DOCKER_DRIVER: overlay2
+
+.build-docker-image-template:
+  image: docker:19.03.12
+  services:
+    - name: docker:19.03.12-dind
+      command: ["--mtu=1441"]
+  before_script:
+    # Display docker info
+    - docker info
+  script:
+    # Docker config from Vault
+    - mkdir ~/.docker
+    - echo $DOCKER_CONFIG_BASE64 |base64 -d > ~/.docker/config.json
+    - apk add make tzdata
+    - export DEFAULT_TAG="latest"
+    - >
+      if [ $CI_COMMIT_TAG != null ]; then
+        export DEFAULT_TAG="$CI_COMMIT_TAG" && export DEPENDENCY_TAG="$CI_COMMIT_TAG"
+      fi
+    # Build and Publish based on "default tag"
+    - echo "$DEFAULT_TAG"
+    - make build-$IMAGE_NAME
+    - make publish-$IMAGE_NAME
+
+.jira-action-template:
+  stage: "Post Build Actions"
+  image: php:7.4-cli
+  before_script:
+    # Install packages
+    - apt-get update && apt-get install wget unzip -y
+    # Install vault
+    - wget https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip
+    - unzip vault_${VAULT_VERSION}_linux_amd64.zip -d /usr/local/bin
+    - chmod +x /usr/local/bin/vault
+    # Authenticate and get token.
+    - export VAULT_TOKEN="$(vault write -tls-skip-verify=true -field=token auth/jwt/login role=$READ_ROLE jwt=$CI_JOB_JWT)"
+    - vault login -tls-skip-verify=true ${VAULT_TOKEN}
+    # Retrieve secrets from vault
+    - export JIRA_CREDENTIALS=$(vault kv get -tls-skip-verify=true -field=token ${VAULT_PATH}/jira)
+    - export JIRA_URL=$(vault kv get -tls-skip-verify=true -field=url ${VAULT_PATH}/jira)
+  script:
+    - php -r "require 'scripts/UpdateJiraIssues.php'; $JIRA_ACTION;"
+
+.scan-docker-image-template:
+  stage: "Test"
+  image: aquasec/trivy:latest
+  variables:
+    TRIVY_AUTH_URL: "$REGISTRY_URL"
+    REGISTRY_PATH: "future4care/snapshots"
+  before_script:
+    # Install vault
+    - wget https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip
+    - unzip vault_${VAULT_VERSION}_linux_amd64.zip -d /usr/local/bin
+    - chmod +x /usr/local/bin/vault
+    # Authenticate and get token.
+    - export VAULT_TOKEN="$(vault write -tls-skip-verify=true -field=token auth/jwt/login role=$READ_ROLE jwt=$CI_JOB_JWT)"
+    - vault login -tls-skip-verify=true ${VAULT_TOKEN}
+    # Retrieve secrets from vault
+    - export TRIVY_USERNAME=$(vault kv get -tls-skip-verify=true -field=login ${VAULT_PATH}/artifactory)
+    - export TRIVY_PASSWORD=$(vault kv get -tls-skip-verify=true -field=api_key ${VAULT_PATH}/artifactory)
+  script:
+    - trivy --version
+    - trivy image --clear-cache
+    - trivy --download-db-only --no-progress --cache-dir .trivycache/
+    - trivy -d --cache-dir .trivycache/ image $ARGS --timeout 10m0s --exit-code 0 --no-progress --ignore-unfixed --severity HIGH $REGISTRY_URL/$REGISTRY_PATH/$IMAGE_NAME:latest
+    - trivy -d --cache-dir .trivycache/ image $ARGS --timeout 10m0s --exit-code 1 --no-progress --ignore-unfixed --severity CRITICAL $REGISTRY_URL/$REGISTRY_PATH/$IMAGE_NAME:latest
+  cache:
+    paths:
+      - .trivycache/
+  when: always
+  only:
+    - web
+    - schedules
+
+build:clamav:
+  stage: "Build Docker Images"
+  extends: .build-docker-image-template
+  variables:
+    IMAGE_NAME: clamav
+  when: always
+  only:
+    - web
+    - schedules
+    - tags
+
+build:cron:
+  stage: "Build Docker Images (dependencies)"
+  extends: .build-docker-image-template
+  needs:
+    - job: build:php
+  variables:
+    IMAGE_NAME: cron
+  only:
+    - web
+    - schedules
+    - tags
+
+build:nginx:
+  stage: "Build Docker Images (dependencies)"
+  extends: .build-docker-image-template
+  needs:
+    - job: build:php
+  variables:
+    IMAGE_NAME: nginx
+  when: always
+  only:
+    - web
+    - schedules
+    - tags
+
+build:php:
+  stage: "Build Docker Images"
+  extends: .build-docker-image-template
+  variables:
+    IMAGE_NAME: php
+  needs:
+    - job: compile:scss
+  when: always
+  only:
+    - web
+    - schedules
+    - tags
+
+build:sass:
+  stage: "Build Docker Images"
+  extends: .build-docker-image-template
+  variables:
+    IMAGE_NAME: sass
+  when: always
+  only:
+    - web
+    - schedules
+
+compile:scss:
+  stage: "Compile"
+  image: composer:2.0.14
+  before_script:
+    - apk update
+    - apk add --no-cache npm zip unzip libzip-dev libpng-dev libjpeg-turbo-dev freetype-dev pcre-dev ${PHPIZE_DEPS}
+    - docker-php-ext-configure gd --with-freetype --with-jpeg
+    - docker-php-ext-install gd
+    - pecl install oauth
+    - docker-php-ext-enable oauth
+    - npm install -g sass@^1.35
+    - composer --ignore-platform-reqs --no-progress --no-suggest --optimize-autoloader --no-dev install
+  script:
+    - sass ./web/themes/custom/f4c/integration/scss/build/blocks/:./web/themes/custom/f4c/css/blocks/ --style compressed --no-charset --no-source-map
+    - sass ./web/themes/custom/f4c/integration/scss/build/components/:./web/themes/custom/f4c/css/components/ --style compressed --no-charset --no-source-map
+    - sass ./web/themes/custom/f4c/integration/scss/build/pages/:./web/themes/custom/f4c/css/pages/ --style compressed --no-charset --no-source-map
+    - sass ./web/themes/custom/f4c/integration/scss/build/global.scss:./web/themes/custom/f4c/css/global.css --style compressed --no-charset --no-source-map
+    - sass ./web/themes/custom/f4c/integration/scss/build/wysiwyg.scss:./web/themes/custom/f4c/css/wysiwyg.css --style compressed --no-charset --no-source-map
+  when: always
+  only:
+    - web
+    - schedules
+    - tags
+  artifacts:
+    paths:
+      - ./web/themes/custom/f4c/css
+
+jira:deploy:
+  extends: .jira-action-template
+  variables:
+    JIRA_ACTION: transitToDeploy()
+  only:
+    - web
+    - schedules
+
+jira:fixVersion:
+  extends: .jira-action-template
+  variables:
+    JIRA_ACTION: addFixVersions();
+  only:
+    - tags
+
+linter:drupal:
+  image: $REGISTRY_URL/future4care/snapshots/php:latest
+  cache:
+    paths:
+      - vendor/
+  stage: "Code Checks"
+  only:
+    - merge_requests
+  before_script:
+    - composer --no-progress --no-suggest --optimize-autoloader install
+  script:
+    - make lint-drupal
+  allow_failure: false
+
+linter:eslint:
+  image: node:latest
+  cache:
+    paths:
+      - node_modules/
+  stage: "Code Checks"
+  only:
+    - merge_requests
+  before_script:
+    - npm install
+  script:
+    - make lint-js
+  allow_failure: false
+
+linter:docker:
+  image: hadolint/hadolint:latest-debian
+  stage: "Code Checks"
+  only:
+    - merge_requests
+  script:
+    - hadolint docker/clamav/Dockerfile
+    - hadolint docker/cron/Dockerfile
+    - hadolint docker/nginx/Dockerfile
+    - hadolint docker/php/Dockerfile
+    - hadolint docker/sass/Dockerfile
+  allow_failure: false
+
+linter:scss:
+  image: node:latest
+  cache:
+    paths:
+      - node_modules/
+  stage: "Code Checks"
+  only:
+    - merge_requests
+  before_script:
+    - npm install
+  script:
+    - make lint-scss
+  allow_failure: true
+
+sonarqube:check:
+  stage: "Code Checks"
+  image: sonarsource/sonar-scanner-cli:latest
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  variables:
+    SONAR_HOST_URL: ${SONAR_HOST_URL}
+  before_script:
+    # Install vault
+    - wget https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip
+    - unzip vault_${VAULT_VERSION}_linux_amd64.zip -d /usr/local/bin
+    - chmod +x /usr/local/bin/vault
+    # Authenticate and get token.
+    - export VAULT_TOKEN="$(vault write -tls-skip-verify=true -field=token auth/jwt/login role=$READ_ROLE jwt=$CI_JOB_JWT)"
+    - vault login -tls-skip-verify=true ${VAULT_TOKEN}
+    # Retrieve secrets from vault
+    - export SONAR_URL=$(vault kv get -tls-skip-verify=true -field=url ${VAULT_PATH}/sonar)
+    - export SONAR_LOGIN=$(vault kv get -tls-skip-verify=true -field=token-sonar-scanner ${VAULT_PATH}/sonar)
+  script:
+    - sonar-scanner -X -Dsonar.host.url=$SONAR_URL -Dsonar.login=$SONAR_LOGIN
+  only:
+    - web
+    - schedules
+  allow_failure: true
+
+test:scan-php-image:
+  stage: "Test"
+  extends: .scan-docker-image-template
+  needs:
+    - job: build:php
+  variables:
+    IMAGE_NAME: php
+
+test:scan-nginx-image:
+  stage: "Test"
+  extends: .scan-docker-image-template
+  needs:
+    - job: build:nginx
+  variables:
+    IMAGE_NAME: nginx
+    ARGS: --skip-dirs /var/www/html
+
+test:scan-clamav-image:
+  stage: "Test"
+  extends: .scan-docker-image-template
+  needs:
+    - job: build:clamav
+  variables:
+    IMAGE_NAME: clamav
+
+test:zap:
+  stage: "Test"
+  image: owasp/zap2docker-weekly:latest
+  before_script:
+    - mkdir -p /zap/wrk
+  script:
+    # Warm the environment with curl
+    - curl -o /dev/null -v $F4C_INT_URL
+    - zap-baseline.py -t $F4C_INT_URL -I
+  when: delayed
+  start_in: 5 minutes
+  only:
+    - web
+    - schedules

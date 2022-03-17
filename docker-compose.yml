@@ -1,0 +1,102 @@
+version: "3"
+
+services:
+
+  cron:
+    image: custom/cron:${CRON_CUSTOM_TAG:-latest}
+    container_name: "custom_cron"
+    volumes:
+      - docroot:/var/www/html/web:cached
+      - ./web/modules/custom:/var/www/html/web/modules/custom
+      - ./web/themes/custom:/var/www/html/web/themes/custom
+    depends_on:
+      - mysql
+      - redis
+    env_file:
+      - ./.env.dist
+      - ./.env
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: "custom_mailhog"
+
+  mysql:
+    image: mysql:${MYSQL_CUSTOM_TAG:-8.0.20}
+    container_name: "custom_mysql"
+    stop_grace_period: 30s
+    command: --default-authentication-plugin=mysql_native_password
+    env_file:
+      - ./.env.dist
+      - ./.env
+    volumes:
+#      - ./mysql-init:/docker-entrypoint-initdb.d # Place init .sql file(s) here.
+      - database:/var/lib/mysql
+
+  nginx:
+    image: custom/nginx:${NGINX_CUSTOM_TAG:-latest}
+    container_name: "custom_nginx"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - docroot:/var/www/html/web:cached
+      - ./web/modules/custom:/var/www/html/web/modules/custom
+      - ./web/themes/custom:/var/www/html/web/themes/custom
+      - ./web/sites:/var/www/html/web/sites
+    env_file:
+      - ./.env.dist
+      - ./.env
+
+  php:
+    image: custom/php:${PHP_CUSTOM_TAG:-latest}
+    container_name: "custom_php"
+    volumes:
+      - docroot:/var/www/html/web:cached
+      - ./config:/var/www/html/config
+      - ./web/modules/custom:/var/www/html/web/modules/custom
+      - ./web/themes/custom:/var/www/html/web/themes/custom
+      - ./web/sites:/var/www/html/web/sites
+      - ./composer.json:/var/www/html/composer.json
+      - ./composer.lock:/var/www/html/composer.lock
+    depends_on:
+      - mysql
+      - nginx
+      - redis
+    env_file:
+      - ./.env.dist
+      - ./.env
+
+  redis:
+    image: "redis:${REDIS_CUSTOM_TAG:-5.0}"
+    container_name: "custom_redis"
+
+  sass:
+    image: custom/sass:${SCSS_CUSTOM_TAG:-latest}
+    container_name: "custom_sass"
+    volumes:
+      - docroot:/var/www/html/web:cached
+      - ./web/themes/custom:/var/www/html/web/themes/custom
+    command:
+      - --watch
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/abstracts
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/base
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/blocks
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/components
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/helpers
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/layout
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/pages
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/build/blocks/:/var/www/html/web/themes/custom/my_theme/css/blocks/
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/build/components/:/var/www/html/web/themes/custom/my_theme/css/components/
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/build/pages/:/var/www/html/web/themes/custom/my_theme/css/pages/
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/build/global.scss:/var/www/html/web/themes/custom/my_theme/css/global.css
+      - /var/www/html/web/themes/custom/my_theme/integration/scss/build/wysiwyg.scss:/var/www/html/web/themes/custom/my_theme/css/wysiwyg.css
+      - --no-charset
+
+# For development purposes only
+#  clamav:
+#    image: custom/clamav:${CLAMAV_CUSTOM_TAG:-latest}
+#    container_name: "custom_clamav"
+
+volumes:
+  docroot:
+  database:

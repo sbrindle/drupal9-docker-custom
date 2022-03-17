@@ -1,0 +1,14 @@
+# Ignore PhpStorm files.
+.idea
+
+# Files VSCODE
+.vscode
+
+# Ignore local environment variables file.
+.env
+
+# Ignore volumes
+composer.json
+composer.lock
+config
+web

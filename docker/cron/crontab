@@ -1,0 +1,4 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+*/15 * * * * www-data /usr/local/bin/drush -r /var/www/html cron >> /var/log/drupal-cron.log 2>&1
+* * * * * www-data find /var/www/html/web/sites/default/files/tmp -type f -mmin +60 -delete
