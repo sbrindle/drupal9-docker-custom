@@ -5,10 +5,10 @@ set -e
 
 if [ "$XDEBUG_ENABLED" == "true" ]; then
     echo -e "[INFO] Enable xdebug."
-  sed -i 's/^;zend/zend/g' /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+  sed -i 's/^;zend/zend/g' /usr/local/etc/php/conf.d/docker-php-ext-xdebug3.ini
 else
     echo -e "[INFO] Disable xdebug."
-  sed -i 's/^zend/;zend/g' /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+  sed -i 's/^zend/;zend/g' /usr/local/etc/php/conf.d/docker-php-ext-xdebug3.ini
 fi
 
 exec "$@"

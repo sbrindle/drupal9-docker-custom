@@ -50,7 +50,7 @@ variables:
 
 .jira-action-template:
   stage: "Post Build Actions"
-  image: php:7.4-cli
+  image: php:8.1-cli
   before_script:
     # Install packages
     - apt-get update && apt-get install wget unzip -y

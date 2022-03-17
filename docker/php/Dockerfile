@@ -1,5 +1,5 @@
 FROM composer:2.0.14 AS composer
-FROM php:7.4-fpm AS php-fpm
+FROM php:8.1-fpm AS php-fpm
 
 ENV DEBIAN_FRONTEND noninteractive
 ENV LANG C.UTF-8
@@ -80,10 +80,10 @@ RUN mkdir /var/log/php && \
        /var/log/php \
        /var/www && \
     mkdir -p /run/php && \
-    touch /run/php/php7.4-fpm.pid && \
-    chown www-data:www-data /run/php/php7.4-fpm.pid && \
-    touch /var/log/php7.4-fpm.log && \
-    chown www-data:www-data /var/log/php7.4-fpm.log
+    touch /run/php/php8.1-fpm.pid && \
+    chown www-data:www-data /run/php/php8.1-fpm.pid && \
+    touch /var/log/php8.1-fpm.log && \
+    chown www-data:www-data /var/log/php8.1-fpm.log
 
 # Copy sources, the actual context of docker is the "root" directory.
 COPY --chown=www-data:www-data ./composer.json  /var/www/html/
