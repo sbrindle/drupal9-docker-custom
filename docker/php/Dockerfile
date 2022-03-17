@@ -61,7 +61,7 @@ RUN printf "\n" | pecl install apcu && \
     docker-php-ext-enable apcu
 
 # Install OAuth, xDebug and Redis.
-RUN printf "\n" | pecl install oauth redis xdebug-2.9.8 && \
+RUN printf "\n" | pecl install oauth redis xdebug && \
     docker-php-ext-enable oauth redis xdebug
 
 # Install Composer.
