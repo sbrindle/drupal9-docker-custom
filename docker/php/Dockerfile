@@ -1,4 +1,5 @@
-FROM composer:2.0.14 AS composer
+# Cannot use composer 2.3 image, because "cweagans/composer-patches" package is not compatible.
+FROM composer:2.2 AS composer
 FROM php:8.1-fpm AS php-fpm
 
 ENV DEBIAN_FRONTEND noninteractive
